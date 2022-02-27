@@ -1,0 +1,59 @@
+---
+- name: ensure docker networks available
+  docker_network:
+    name: "{{ item.name }}"
+  with_items: "{{ nginx_container_networks }}"
+
+- name: ensure nginx config folder
+  file:
+    path: "{{ nginx_filesystem_root }}/{{ item }}"
+    state: directory
+  with_items:
+    - config
+
+- name: ensure nginx sites folder
+  file:
+    path: "{{ nginx_filesystem_sites }}"
+    state: directory
+
+- name: ensure letsencrypt wildcard cert
+  import_tasks: letsencrypt-wildcard.yaml
+  when: nginx_config_certbot_enabled == true
+
+- name: ensure selfsigned cert
+  import_tasks: self-signed-ssl.yaml
+  when: nginx_config_certbot_enabled == false
+
+- name: ensure configurations configuration
+  template:
+    src: "{{ item }}"
+    dest: "{{ nginx_filesystem_root }}/config/{{ item }}"
+  with_items:
+    - nginx.conf
+
+- name: ensure latest image version
+  docker_image:
+    name: "{{ nginx_image_name }}"
+    tag: "{{ nginx_image_tag }}"
+    source: pull
+
+- name: ensure container stopped
+  docker_container:
+    name: "{{ nginx_container_name }}"
+    state: absent
+
+- name: ensure container started
+  docker_container:
+    name: "{{ nginx_container_name }}"
+    image: "{{ nginx_image_name }}:{{ nginx_image_tag }}"
+    state: started
+    restart_policy: unless-stopped
+    networks: "{{ nginx_container_networks }}"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - "{{ nginx_filesystem_root }}/config/nginx.conf:/etc/nginx/nginx.conf"
+      - "{{ nginx_filesystem_sites }}:/etc/nginx/conf.d/"
+      - "{{ nginx_filesystem_ssl }}:/etc/nginx/ssl/"
+      - "{{ nginx_filesystem_certbot }}:/etc/nginx/certbot/"
+    published_ports: "{{ nginx_config_expose_ports }}"

@@ -1,0 +1,108 @@
+- name: ensure netcup api python module
+  pip:
+    name: nc-dnsapi
+    state: latest
+
+- name: ensure nginx ssl folder
+  file:
+    path: "{{ nginx_filesystem_ssl }}"
+    state: directory
+
+- name: ensure certbot folder
+  file:
+    path: "{{ nginx_filesystem_certbot }}"
+    state: directory
+
+- name: ensure dh params file
+  openssl_dhparam:
+    path: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}-dhparam.pem"
+
+- name: ensure account private key file
+  openssl_privatekey:
+    path: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.account.key"
+    size: 4096
+
+- name: ensure signing private key file
+  openssl_privatekey:
+    path: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.key"
+    size: 4096
+
+- name: ensure csr
+  openssl_csr:
+    path: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.csr"
+    privatekey_path: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.key"
+    common_name: "{{ nginx_config_cert_common_name }}"
+    email_address: "{{ nginx_config_cert_email }}"
+
+- name: check if fullchain exists
+  stat:
+    path: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.crt"
+  register: fullchain_stat
+
+- name: check certificate expiration
+  community.crypto.x509_certificate_info:
+    path: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.crt"
+    valid_at:
+      next_30_days: "+29d"
+  register: cert_valid
+  when: fullchain_stat.stat.exists == true
+
+- name: create acme challenge
+  acme_certificate:
+    acme_version: 2
+    terms_agreed: yes
+    account_key_src: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.account.key"
+    account_email: "{{ nginx_config_certbot_account_email }}"
+    src: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.csr"
+    cert: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.crt"
+    challenge: dns-01
+    acme_directory: https://acme-v02.api.letsencrypt.org/directory
+    remaining_days: 60
+  register: challenge
+  when: fullchain_stat.stat.exists == false or cert_valid.valid_at.next_30_days == false
+
+- name: ensure challenge dns record set
+  community.general.netcup_dns:
+    api_key: "{{ nginx_config_netcup_api_key }}"
+    api_password: "{{ nginx_config_netcup_api_password }}"
+    customer_id: "{{ nginx_config_netcup_customer_id }}"
+    domain: "{{ nginx_config_netcup_domain }}"
+    name: "{{ challenge.challenge_data['{{ nginx_config_cert_common_name }}']['dns-01'].resource }}"
+    type: "TXT"
+    value: "{{ challenge.challenge_data['{{ nginx_config_cert_common_name }}']['dns-01'].resource_value }}"
+    solo: true
+    state: present
+  when: fullchain_stat.stat.exists == false or cert_valid.valid_at.next_30_days == false
+  register: dns_request
+
+- name: wait for 600s
+  wait_for:
+    timeout: 600
+  when: fullchain_stat.stat.exists == false or cert_valid.valid_at.next_30_days == false
+
+- name: validate and retrieve certificate
+  acme_certificate:
+    acme_version: 2
+    account_key_src: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.account.key"
+    account_email: "{{ nginx.config.certbot.account.email }}"
+    src: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.csr"
+    cert: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.crt"
+    fullchain: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.crt"
+    chain: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}-intermediate.crt"
+    challenge: dns-01
+    acme_directory: https://acme-v02.api.letsencrypt.org/directory
+    remaining_days: 60
+    data: "{{ challenge }}"
+  when: fullchain_stat.stat.exists == false or cert_valid.valid_at.next_30_days == false
+
+- name: ensure challenge dns record cleanup
+  community.general.netcup_dns:
+    api_key: "{{ nginx_config_netcup_api_key }}"
+    api_password: "{{ nginx_config_netcup_api_password }}"
+    customer_id: "{{ nginx_config_netcup_customer_id }}"
+    domain: "{{ nginx_config_netcup_domain }}"
+    name: "{{ challenge.challenge_data['{{ nginx_config_cert_common_name }}']['dns-01'].resource }}"
+    type: "TXT"
+    value: "{{ challenge.challenge_data['{{ nginx_config_cert_common_name }}']['dns-01'].resource_value }}"
+    state: absent
+  when: fullchain_stat.stat.exists == false or cert_valid.valid_at.next_30_days == false
