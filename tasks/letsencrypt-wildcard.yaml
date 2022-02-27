@@ -67,9 +67,9 @@
     api_password: "{{ nginx_config_netcup_api_password }}"
     customer_id: "{{ nginx_config_netcup_customer_id }}"
     domain: "{{ nginx_config_netcup_domain }}"
-    name: "{{ challenge.challenge_data['{{ nginx_config_cert_common_name }}']['dns-01'].resource }}"
+    name: "{{ challenge.challenge_data[nginx_config_cert_common_name]['dns-01'].resource }}"
     type: "TXT"
-    value: "{{ challenge.challenge_data['{{ nginx_config_cert_common_name }}']['dns-01'].resource_value }}"
+    value: "{{ challenge.challenge_data[nginx_config_cert_common_name]['dns-01'].resource_value }}"
     solo: true
     state: present
   when: fullchain_stat.stat.exists == false or cert_valid.valid_at.next_30_days == false
@@ -84,7 +84,7 @@
   acme_certificate:
     acme_version: 2
     account_key_src: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.account.key"
-    account_email: "{{ nginx.config.certbot.account.email }}"
+    account_email: "{{ nginx_config_certbot_account_email }}"
     src: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.csr"
     cert: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.crt"
     fullchain: "{{ nginx_filesystem_ssl }}/{{ nginx_config_cert_name }}.crt"
@@ -101,8 +101,8 @@
     api_password: "{{ nginx_config_netcup_api_password }}"
     customer_id: "{{ nginx_config_netcup_customer_id }}"
     domain: "{{ nginx_config_netcup_domain }}"
-    name: "{{ challenge.challenge_data['{{ nginx_config_cert_common_name }}']['dns-01'].resource }}"
+    name: "{{ challenge.challenge_data[nginx_config_cert_common_name]['dns-01'].resource }}"
     type: "TXT"
-    value: "{{ challenge.challenge_data['{{ nginx_config_cert_common_name }}']['dns-01'].resource_value }}"
+    value: "{{ challenge.challenge_data[nginx_config_cert_common_name]['dns-01'].resource_value }}"
     state: absent
   when: fullchain_stat.stat.exists == false or cert_valid.valid_at.next_30_days == false

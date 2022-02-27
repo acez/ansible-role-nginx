@@ -1,4 +1,11 @@
 ---
+- name: Ensure packages installed
+  apt:
+    pkg: "{{ item }}"
+    state: latest
+  with_items:
+    - python3-cryptography
+
 - name: ensure docker networks available
   docker_network:
     name: "{{ item.name }}"
