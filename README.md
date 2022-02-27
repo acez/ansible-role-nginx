@@ -1,4 +1,4 @@
-Role Name
+nginx
 =========
 
 Role to set up a nginx container with support for self-signed ssl certificates and let's encrypt wildcard certificate with netcup dns challenge.
