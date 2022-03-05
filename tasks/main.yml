@@ -6,6 +6,16 @@
   with_items:
     - python3-cryptography
 
+- name: ensure netcup api python module
+  pip:
+    name: nc-dnsapi
+    state: latest
+
+- name: ensure dns python module
+  pip:
+    name: dnspython
+    state: latest
+
 - name: ensure docker networks available
   docker_network:
     name: "{{ item.name }}"
@@ -23,13 +33,179 @@
     path: "{{ nginx_filesystem_sites }}"
     state: directory
 
-- name: ensure letsencrypt wildcard cert
-  import_tasks: letsencrypt-wildcard.yaml
-  when: nginx_config_certbot_enabled == true
+- name: ensure nginx ssl folder
+  file:
+    path: "{{ nginx_filesystem_ssl }}"
+    state: directory
 
-- name: ensure selfsigned cert
-  import_tasks: self-signed-ssl.yaml
-  when: nginx_config_certbot_enabled == false
+- name: ensure certbot folder
+  file:
+    path: "{{ nginx_filesystem_certbot }}"
+    state: directory
+
+- name: ensure dh params file
+  openssl_dhparam:
+    path: "{{ nginx_filesystem_ssl }}/dhparam.pem"
+
+- name: ensure account private key file
+  openssl_privatekey:
+    path: "{{ nginx_filesystem_ssl }}/account.key"
+    size: 4096
+
+- name: ensure signing private key file
+  openssl_privatekey:
+    path: "{{ nginx_filesystem_ssl }}/signing.key"
+    size: 4096
+
+- name: ensure signing requests for all sites
+  openssl_csr:
+    path: "{{ nginx_filesystem_ssl }}/{{ item.hostname }}.csr"
+    privatekey_path: "{{ nginx_filesystem_ssl }}/signing.key"
+    common_name: "{{ item.hostname }}"
+    email_address: "{{ nginx_config_cert_email }}"
+  loop: "{{ nginx_config_sites | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+
+# Self Signed Certificates
+- name: ensure signed openssl cert
+  openssl_certificate:
+    path: "{{ nginx_filesystem_ssl }}/{{ item.hostname }}.crt"
+    privatekey_path: "{{ nginx_filesystem_ssl }}/{{ item.hostname }}.key"
+    csr_path: "{{ nginx_filesystem_ssl }}/{{ item.hostname }}.csr"
+    provider: selfsigned
+  loop: "{{ nginx_config_sites | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+  when: item.ssl_provider == "self-signed"
+
+# Letsencrypt Certificates
+- name: check for fullchain certificate for sites
+  stat:
+    path: "{{ nginx_filesystem_ssl }}/{{ item.hostname }}.crt"
+  loop: "{{ nginx_config_sites | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+  when: item.ssl_provider == "letsencrypt"
+  register: sites_fullchain_stat
+
+- name: build cert validity dict
+  set_fact:
+    cert_validity: "{{ cert_validity | default({}) | combine({item.item.hostname: item.stat.exists}) }}"
+  loop: "{{ sites_fullchain_stat.results | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.item.hostname }}"
+
+- name: check certificate expiration
+  community.crypto.x509_certificate_info:
+    path: "{{ nginx_filesystem_ssl }}/{{ item.hostname }}.crt"
+    valid_at:
+      next_30_days: "+29d"
+  loop: "{{ nginx_config_sites | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+  when: item.ssl_provider == "letsencrypt" and cert_validity[item.hostname] == true
+  register: existing_certs_valid
+
+- name: update cert validity dict
+  set_fact:
+    cert_validity: "{{ cert_validity | default({}) | combine({item.item.hostname: item.valid_at.next_30_days}) }}"
+  loop: "{{ existing_certs_valid.results | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.item.hostname }}"
+  when: not 'skipped' in item or item.skipped == false
+
+- name: create acme challenge
+  acme_certificate:
+    acme_version: 2
+    terms_agreed: yes
+    account_key_src: "{{ nginx_filesystem_ssl }}/account.key"
+    account_email: "{{ nginx_config_letsencrypt_account_email }}"
+    src: "{{ nginx_filesystem_ssl }}/{{ item.hostname }}.csr"
+    cert: "{{ nginx_filesystem_ssl }}/{{ item.hostname }}.crt"
+    challenge: dns-01
+    acme_directory: "{{ nginx_config_letsencrypt_acme_directory }}"
+    remaining_days: 60
+  loop: "{{ nginx_config_sites | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+  when: item.ssl_provider == "letsencrypt" and cert_validity[item.hostname] == false
+  register: acme_challenge
+
+- name: build dict with acme records and challenges
+  set_fact:
+    acme_dns_challenges: "{{ acme_dns_challenges | default({}) | combine({item.item.hostname: {'record': item.challenge_data[item.item.hostname]['dns-01'].record, 'value': item.challenge_data[item.item.hostname]['dns-01'].resource_value }}) }}"
+  loop: "{{ acme_challenge.results | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.item.hostname }}"
+  when: not 'skipped' in item or item.skipped == false
+
+- name: attempt on setting dns records and retrieving letsencrypt certificate
+  block:
+    - name: ensure challenge dns record set
+      community.general.netcup_dns:
+        api_key: "{{ nginx_config_netcup_api_key }}"
+        api_password: "{{ nginx_config_netcup_api_password }}"
+        customer_id: "{{ nginx_config_netcup_customer_id }}"
+        domain: "{{ nginx_config_netcup_domain }}"
+        name: "{{ acme_dns_challenges[item.hostname].record | replace(nginx_config_netcup_domain, '') | regex_replace('\\.$','') }}"
+        type: "TXT"
+        value: "{{ acme_dns_challenges[item.hostname].value }}"
+        solo: true
+        state: present
+      loop: "{{ nginx_config_sites | flatten(levels=1) }}"
+      loop_control:
+        label: "{{ item.hostname }}"
+      when: item.ssl_provider == "letsencrypt" and cert_validity[item.hostname] == false and item.hostname in acme_dns_challenges
+
+    - name: initialize dns records list
+      set_fact:
+        dns_records_wait_for: []
+
+    - name: populate list with dns txt records to wait for
+      set_fact:
+        dns_records_wait_for: "{{ dns_records_wait_for | default([]) + [{'name': item.challenge_data[item.item.hostname]['dns-01'].record, 'values': item.challenge_data[item.item.hostname]['dns-01'].resource_value, 'mode': 'equals'}] }}"
+      loop: "{{ acme_challenge.results | flatten(levels=1) }}"
+      loop_control:
+        label: "{{ item.item.hostname }}"
+      when: not 'skipped' in item or item.skipped == false
+
+    - name: wait for all dns records
+      community.dns.wait_for_txt:
+        records: "{{ dns_records_wait_for }}"
+      when: "dns_records_wait_for | length > 0"
+
+    - name: validate and retrieve certificate
+      acme_certificate:
+        acme_version: 2
+        account_key_src: "{{ nginx_filesystem_ssl }}/account.key"
+        account_email: "{{ nginx_config_certbot_account_email }}"
+        src: "{{ nginx_filesystem_ssl }}/{{ item.item.hostname }}.csr"
+        cert: "{{ nginx_filesystem_ssl }}/{{ item.item.hostname }}.crt"
+        fullchain: "{{ nginx_filesystem_ssl }}/{{ item.item.hostname }}.crt"
+        chain: "{{ nginx_filesystem_ssl }}/{{ item.item.hostname }}-intermediate.crt"
+        challenge: dns-01
+        acme_directory: "{{ nginx_config_letsencrypt_acme_directory }}"
+        remaining_days: 60
+        data: "{{ item }}"
+      loop: "{{ acme_challenge.results | flatten(levels=1) }}"
+      loop_control:
+        label: "{{ item.item.hostname }}"
+  always:
+    - name: ensure challenge dns record cleanup
+      community.general.netcup_dns:
+        api_key: "{{ nginx_config_netcup_api_key }}"
+        api_password: "{{ nginx_config_netcup_api_password }}"
+        customer_id: "{{ nginx_config_netcup_customer_id }}"
+        domain: "{{ nginx_config_netcup_domain }}"
+        name: "{{ acme_dns_challenges[item.hostname].record | replace(nginx_config_netcup_domain, '') | regex_replace('\\.$','') }}"
+        type: "TXT"
+        value: "{{ acme_dns_challenges[item.hostname].value }}"
+        state: absent
+      loop: "{{ nginx_config_sites | flatten(levels=1) }}"
+      loop_control:
+        label: "{{ item.hostname }}"
+      when: item.ssl_provider == "letsencrypt" and cert_validity[item.hostname] == false and item.hostname in acme_dns_challenges
 
 - name: ensure configurations configuration
   template:
@@ -37,6 +213,18 @@
     dest: "{{ nginx_filesystem_root }}/config/{{ item }}"
   with_items:
     - nginx.conf
+
+- name: copy site config
+  template:
+    src: "site.conf"
+    dest: "{{ nginx_filesystem_sites }}/{{ item.hostname }}.conf"
+  vars:
+    path_config: "{{ item.path_config }}"
+    hostname: "{{ item.hostname }}"
+    ssl_provider: "{{ item.ssl_provider }}"
+  loop: "{{ nginx_config_sites | flatten(levels=1) }}"
+  loop_control:
+    label: "{{ item.hostname }}"
 
 - name: ensure latest image version
   docker_image:

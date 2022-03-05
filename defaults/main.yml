@@ -2,7 +2,6 @@
 nginx_filesystem_root:
 nginx_filesystem_sites:
 nginx_filesystem_ssl:
-nginx_filesystem_certbot:
 
 nginx_container_name: "nginx"
 nginx_container_networks:
@@ -14,11 +13,15 @@ nginx_config_certbot_enabled: false
 nginx_config_expose_ports:
   - "80:80"
   - "443:443"
-nginx_config_cert_name: "default"
-nginx_config_cert_common_name:
+
 nginx_config_cert_email:
-nginx_config_certbot_account_email:
+
+nginx_config_letsencrypt_account_email:
+nginx_config_letsencrypt_acme_directory: "https://acme-v02.api.letsencrypt.org/directory"
+
 nginx_config_netcup_api_key:
 nginx_config_netcup_api_password:
 nginx_config_netcup_customer_id:
 nginx_config_netcup_domain:
+
+nginx_config_sites:
