@@ -9,7 +9,6 @@ nginx_container_networks:
 nginx_image_name: "nginx"
 nginx_image_tag: "stable"
 
-nginx_config_certbot_enabled: false
 nginx_config_expose_ports:
   - "80:80"
   - "443:443"

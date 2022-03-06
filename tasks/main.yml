@@ -38,11 +38,6 @@
     path: "{{ nginx_filesystem_ssl }}"
     state: directory
 
-- name: ensure certbot folder
-  file:
-    path: "{{ nginx_filesystem_certbot }}"
-    state: directory
-
 - name: ensure dh params file
   openssl_dhparam:
     path: "{{ nginx_filesystem_ssl }}/dhparam.pem"
@@ -179,7 +174,7 @@
       acme_certificate:
         acme_version: 2
         account_key_src: "{{ nginx_filesystem_ssl }}/account.key"
-        account_email: "{{ nginx_config_certbot_account_email }}"
+        account_email: "{{ nginx_config_letsencrypt_account_email }}"
         src: "{{ nginx_filesystem_ssl }}/{{ item.item.hostname }}.csr"
         cert: "{{ nginx_filesystem_ssl }}/{{ item.item.hostname }}.crt"
         fullchain: "{{ nginx_filesystem_ssl }}/{{ item.item.hostname }}.crt"
@@ -250,5 +245,4 @@
       - "{{ nginx_filesystem_root }}/config/nginx.conf:/etc/nginx/nginx.conf"
       - "{{ nginx_filesystem_sites }}:/etc/nginx/conf.d/"
       - "{{ nginx_filesystem_ssl }}:/etc/nginx/ssl/"
-      - "{{ nginx_filesystem_certbot }}:/etc/nginx/certbot/"
     published_ports: "{{ nginx_config_expose_ports }}"

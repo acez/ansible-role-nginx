@@ -26,7 +26,6 @@ Role Variables
 | nginx_filesystem_root                           | The path on the filesystem for the nginx files.                                    |        |                                                |
 | nginx_filesystem_sites                          | The path on the filesystem where the sites configurations are stored.              |        |                                                |
 | nginx_filesystem_ssl                            | The path on the filesystem where SSL certificates are stored.                      |        |                                                |
-| nginx_filesystem_letsencrypt                    | The path on the filesystem where letsencrypt files are stored.                     |        |                                                |
 | nginx_config_cert_email                         | The SSL certificate email.                                                         |        |                                                |
 | nginx_config_letsencrypt_dns_challenge_provider | The provider for the letsencrypt dns challenge. Only netcup is current supported.  | netcup |                                                |
 | nginx_config_letsencrypt_account_email          | The account email for lets encrypt.                                                |        |                                                |
